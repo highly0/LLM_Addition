@@ -1,0 +1,84 @@
+  0%|                                                  | 0/3750 [00:00<?, ?it/s]You're using a RobertaTokenizerFast tokenizer. Please note that with a fast tokenizer, using the `__call__` method is faster than using a method to encode the text followed by a call to the `pad` method to get a padded encoding.
+
+
+
+
+
+
+
+
+ 13%|█████▎                                  | 500/3750 [00:17<01:47, 30.27it/s]
+{'loss': 1.9123, 'learning_rate': 1.7333333333333336e-05, 'epoch': 0.67}
+
+
+
+
+
+
+
+
+
+ 27%|██████████▍                            | 1000/3750 [00:35<01:31, 29.93it/s]
+{'loss': 1.7779, 'learning_rate': 1.4666666666666666e-05, 'epoch': 1.33}
+
+
+
+
+
+
+
+
+
+ 40%|███████████████▌                       | 1500/3750 [00:53<01:14, 30.14it/s]
+{'loss': 1.7573, 'learning_rate': 1.2e-05, 'epoch': 2.0}
+
+
+
+
+
+
+
+
+
+ 53%|████████████████████▊                  | 2000/3750 [01:11<00:58, 30.05it/s]
+{'loss': 1.695, 'learning_rate': 9.333333333333334e-06, 'epoch': 2.67}
+
+
+
+
+
+
+
+
+
+ 67%|██████████████████████████             | 2500/3750 [01:29<00:41, 30.40it/s]
+{'loss': 1.6537, 'learning_rate': 6.666666666666667e-06, 'epoch': 3.33}
+
+
+
+
+
+
+
+
+
+ 80%|███████████████████████████████▏       | 3000/3750 [01:47<00:24, 30.25it/s]
+{'loss': 1.6343, 'learning_rate': 4.000000000000001e-06, 'epoch': 4.0}
+
+
+
+
+
+
+
+
+
+ 93%|████████████████████████████████████▍  | 3500/3750 [02:06<00:08, 30.34it/s]
+{'loss': 1.6355, 'learning_rate': 1.3333333333333334e-06, 'epoch': 4.67}
+
+
+
+
+
+100%|███████████████████████████████████████| 3750/3750 [02:15<00:00, 27.67it/s]
+{'train_runtime': 137.9253, 'train_samples_per_second': 435.018, 'train_steps_per_second': 27.189, 'train_loss': 1.718719873046875, 'epoch': 5.0}
