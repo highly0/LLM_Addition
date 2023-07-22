@@ -4,6 +4,7 @@ import math
 from transformers import (
     AutoTokenizer,
     AutoModelForMaskedLM,
+    AutoModelForCausalLM,
     DataCollatorForLanguageModeling,
     TrainingArguments,
     Trainer,
@@ -14,7 +15,7 @@ from dataprep import AdditionDataset
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--train_data_file",
-    default="/workspace/LLM_Addition/data/train/train_add_baseline.txt",
+    default="/workspace/LLM_Addition/data/train/train_add_spaced.txt",
     type=str,
     help="The input training data file (a text file).",
 )
@@ -33,7 +34,7 @@ parser.add_argument(
 parser.add_argument(
     "--model_name",
     type=str,
-    default="distilroberta-base",
+    default="gpt2",
     help="model type",
 )
 parser.add_argument(
@@ -50,24 +51,34 @@ parser.add_argument(
 )
 
 
+MODEL_CLASSES = {
+    "xlm-roberta-large": AutoModelForMaskedLM,
+    "distilroberta-base": AutoModelForMaskedLM,
+    "gpt2": AutoModelForCausalLM
+}
+
+
 if __name__ == "__main__":
     args = parser.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    model = AutoModelForMaskedLM.from_pretrained(args.model_name)
+    auto_model = MODEL_CLASSES[args.model_name]
+    model = auto_model.from_pretrained(args.model_name)
 
     tokenizer.pad_token = tokenizer.eos_token
+    is_mlm = False if args.model_name == 'gpt2' else True
     data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer, mlm_probability=0.15
+        tokenizer=tokenizer, mlm_probability=0.15, mlm=is_mlm
     )
 
     train_dataset = AdditionDataset(file_path=args.train_data_file, tokenizer=tokenizer)
     eval_dataset = AdditionDataset(file_path=args.eval_data_file, tokenizer=tokenizer)
-
+    train_type = args.train_data_file.split('/')[-1].split('.')[0]
+    
     training_args = TrainingArguments(
-        output_dir=f"{args.output_dir}/{args.model_name}/results",
-        logging_dir=f"{args.output_dir}/{args.model_name}/logs",
+        output_dir=f"{args.output_dir}/{train_type}/{args.model_name}/results",
+        logging_dir=f"{args.output_dir}/{train_type}/{args.model_name}/logs",
         num_train_epochs=5,
         learning_rate=2e-5,
         weight_decay=0.01,
@@ -77,7 +88,6 @@ if __name__ == "__main__":
         evaluation_strategy="steps",
         logging_steps=500,  # log & save weights each logging_steps
         save_steps=500,
-        report_to='wandb',
     )
 
     trainer = Trainer(
