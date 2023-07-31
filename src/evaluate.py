@@ -1,84 +1,122 @@
 import re
-import numpy as np
-from tqdm import tqdm
+import argparse
 import torch
-from transformers import T5ForConditionalGeneration, AutoTokenizer
+import transformers
+from torch.utils.data import SequentialSampler, DataLoader
+from torch.utils.data.dataset import TensorDataset
+from tqdm import tqdm
+from sklearn.metrics import mean_squared_error
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+parser = argparse.ArgumentParser()
 
-
-def get_preds_labels(model_inputs, model, tokenizer, bs=16):
-    """given list of model_inputs,"""
-
-    # break model_inputs into chunks
-    decoded_preds = []
-    for chunk in tqdm(chunks(model_inputs, bs)):
-        input_ids = tokenizer(
-            chunk, return_tensors="pt", truncation=True, padding=True
-        )["input_ids"].to(device)
-        preds = model.generate(input_ids)
-        batch_decoded_preds = tokenizer.batch_decode(preds)
-        decoded_preds.extend(batch_decoded_preds)
-
-    # clean outputs to int
-    preds_numbers = []
-    for pred in decoded_preds:
-        preds_numbers.append(int(re.findall(r"\d+", pred)[0]))
-
-    return preds_numbers
+parser.add_argument("-t", "--testset_path", type=str)
+parser.add_argument("-m", "--model_path", type=str)
 
 
-def prepare_model_inputs_labels(numbers_list, max_len=20):
-    """
-    given list of numbers (n1, n2, res), prepare for
-    model intput
-    """
-    res_inputs, res_labels = [], []
-    for numbers in numbers_list:
-        n1, n2, res = numbers
-        max_len = 20
-        n1_filler = "0" * (max_len - len(n1))
-        n2_filler = "0" * (max_len - len(n2))
-
-        model_inputs = f"{n1_filler}{n1}{n2_filler}{n2}"
-        res_inputs.append(model_inputs)
-        res_labels.append(int(res))
-
-    return res_inputs, res_labels
+def process_output(output_strings):
+    """given the model outputs, extract the predicted addition result"""
+    output_numbers = []
+    for output_string in output_strings:
+        fraction = output_string.split("=")[-1].strip()
+        number = fraction.split("!")[0]
+        number = int(number) if number.isnumeric() else 0
+        output_numbers.append(number)
+    return output_numbers
 
 
-def chunks(lst, size):
-    """Yield successive n-sized chunks from lst."""
-    for i in range(0, len(lst), size):
-        yield lst[i : i + size]
+def generate_answer(inputs, batch_size=512):
+    """given the input embeddings, generate model outputs"""
+    dataset = TensorDataset(inputs["input_ids"], inputs["attention_mask"])
+    sampler = SequentialSampler(dataset)
+    dataloader = DataLoader(dataset, sampler=sampler, batch_size=batch_size)
+
+    output_strings = []
+    for batch in tqdm(dataloader):
+        batch_input_ids = batch[0].to(device)
+        outputs = model.generate(
+            input_ids=batch_input_ids,
+            pad_token_id=50256,  # eos
+            do_sample=False,
+            max_length=150,
+        )
+        decoded_ouputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        output_strings.extend(decoded_ouputs)
+
+    processed_ouputs = process_output(output_strings)
+    return processed_ouputs
 
 
-def calculate_loss(model, tokenizer, file_path):
-    """given path of test file, return mse and rmse loss"""
-    with open(file_path, encoding="utf-8") as file:
-        numbers_list = []
-        for line in file:
-            numbers = re.findall(r"\d+", line)
-            numbers_list.append(numbers)
+def parse_test_file(path):
+    """get the input promps and correct label from test file"""
+    inputs = []
+    labels = []
 
-    model_inputs, labels = prepare_model_inputs_labels(numbers_list)
-    preds = get_preds_labels(model_inputs, model, tokenizer)
+    with open(path, "r", encoding="utf-8") as infile:
+        for line in infile:
+            splitted = line.split("=")
+            input_prompt = splitted[0].strip() + ". "
+            inputs.append(input_prompt)
+            labels.append(int(splitted[1].strip()))
 
-    # mse between pred number and label
-    preds = np.array(preds)
-    labels = np.array(labels)
-    mse = ((preds - labels) ** 2).mean()
-    rmse = mse**0.5
-    return mse, rmse
+    return inputs, labels
+
+
+def get_final_results(inputs, predictions, labels):
+    """with our pred and true label, get final metrics"""
+    final_dict = {}
+    final_dict["total"] = 0
+    for input_, pred, label in zip(inputs, predictions, labels):
+        n_len = len(re.findall(r"\d+", input_)[0])
+        curr_label = f"{n_len}_digit"
+        if curr_label not in final_dict:
+            final_dict[curr_label] = 0
+            final_dict[f"{curr_label}_len"] = 0  # how many samples we have
+
+        final_dict[f"{curr_label}_len"] += 1
+        if pred == label:
+            # collect how many rights based on digit length
+            if curr_label in final_dict:
+                final_dict[curr_label] += 1
+            final_dict["total"] += 1
+
+    for res_type in list(final_dict):
+        curr_res_cnt = final_dict[res_type]
+        if res_type == "total":
+            final_dict[f"{res_type}_acc"] = curr_res_cnt / len(labels)
+        elif res_type[1:] == "_digit":  # find acc scores
+            final_dict[f"{res_type}_acc"] = curr_res_cnt / final_dict[f"{res_type}_len"]
+
+    mse_res = mean_squared_error(predictions, labels)
+    final_dict["final_mse"] = mse_res
+
+    return final_dict
 
 
 if __name__ == "__main__":
-    test_path = "/workspace/LLM_Addition/data/eval/test_1.txt"
-    path = (
-        "/workspace/storage/llm_addition/train/t5-large_scratch/results/best_checkpoint"
-    )
-    model = T5ForConditionalGeneration.from_pretrained(path).to(device)
-    tokenizer = AutoTokenizer.from_pretrained("t5-large")
+    args = parser.parse_args()
 
-    res_mse, res_rmse = calculate_loss(model, tokenizer, test_path)
-    print(res_mse, res_rmse)
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    model = transformers.AutoModelWithLMHead.from_pretrained(args.model_path).to(device)
+    tokenizer = transformers.AutoTokenizer.from_pretrained("gpt2", padding_side="left")
+    tokenizer.pad_token = tokenizer.eos_token
+
+    # encode our input prompts -> ready for model
+    input_prompts, correct_results = parse_test_file(args.testset_path)
+    encoded_inputs = tokenizer.batch_encode_plus(
+        input_prompts,
+        add_special_tokens=False,
+        return_tensors="pt",
+        pad_to_max_length=True,
+        truncation=True,
+    )
+    results = generate_answer(encoded_inputs)
+    results_dict = get_final_results(input_prompts, results, correct_results)
+
+    save_path = "/".join(args.model_path.split("/")[:-1])
+    test_type = (args.testset_path.split)("/")[-1]
+
+    with open(f"{save_path}/eval_result_{test_type}", "w+", encoding="utf-8") as file:
+        for result_type, value in results_dict.items():
+
+            file.write(f"{result_type}: {value}\n")
+            print(f"{result_type}: {value}")

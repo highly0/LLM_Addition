@@ -1,38 +1,26 @@
 import argparse
 import torch
-import torch.nn as nn
-import math
-import evaluate
-import re
 from transformers import (
-    AutoTokenizer,
-    T5Tokenizer,
-    AutoModelForMaskedLM,
-    AutoModelForCausalLM,
-    AutoModel,
     DataCollatorForLanguageModeling,
-    DataCollatorForSeq2Seq,
     TrainingArguments,
     Trainer,
     GPT2LMHeadModel,
     GPT2Config,
-    T5Config,
-    T5ForConditionalGeneration,
-    Seq2SeqTrainingArguments,
+    GPT2Tokenizer,
 )
-from dataprep import AdditionDatasetSeq2Seq
+from data_prep import AdditionDataset
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--train_data_file",
-    default="/workspace/LLM_Addition/data/train/train.txt",
+    default="/workspace/LLM_Addition/data/train/train_add_decomp_8_digits.txt",
     type=str,
     help="The input training data file (a text file).",
 )
 parser.add_argument(
     "--eval_data_file",
-    default="/workspace/LLM_Addition/data/eval/test.txt",
+    default="/workspace/LLM_Addition/data/test/test_add_8_digits.txt",
     type=str,
     help="The input evaluation data file (a text file).",
 )
@@ -45,7 +33,7 @@ parser.add_argument(
 parser.add_argument(
     "--model_name",
     type=str,
-    default="t5-large",
+    default="gpt2",
     help="model type",
 )
 parser.add_argument(
@@ -54,13 +42,7 @@ parser.add_argument(
     default=64,
     help="training batch size",
 )
-parser.add_argument(
-    "--train_type",
-    type=str,
-    default="scratch",
-    choices=["finetuned", "scratch"],
-    help="training batch size",
-)
+
 parser.add_argument(
     "--eval_batch_size",
     type=int,
@@ -68,79 +50,52 @@ parser.add_argument(
     help="eval batch size",
 )
 
+parser.add_argument(
+    "--num_train_epochs",
+    type=int,
+    default=15,
+    help="number of epoches",
+)
+
 
 MODEL_CLASSES = {
-    "gpt2": (AutoModelForCausalLM, GPT2Config, GPT2LMHeadModel),
-    "t5-large": (AutoModel, T5Config, T5ForConditionalGeneration),
+    "gpt2": (GPT2Tokenizer, GPT2Config, GPT2LMHeadModel),
 }
 
-
-
-
-
-def save_result(path, perplexity, eval_results):
-    """ save trainer.evaluate to path"""
-    print(f"Perplexity: {perplexity}")
-    with open(
-        path,
-        "w+",
-        encoding="utf-8",
-    ) as file:
-        file.write("trainer.evaluate() results:\n")
-        for k, v in eval_results.items():
-            file.write(f"{k}: {v}\n")
-        file.write(f"Final eval perplexity: {perplexity}\n")
 
 if __name__ == "__main__":
     args = parser.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model_name  # , return_special_tokens_mask=True
-    )
-    if args.train_type == "scratch":  # training model from scratch
-        _, model_config, head_model = MODEL_CLASSES[args.model_name]
-        config = model_config.from_pretrained(
-            args.model_name,
-            vocab_size=len(tokenizer),
-            n_ctx=128,
-            bos_token_id=tokenizer.bos_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-        model = head_model(config)
-    else:  # fine-tuning
-        auto_model, _, _ = MODEL_CLASSES[args.model_name]
-        model = auto_model.from_pretrained(args.model_name)
+    pretrained_tokenizer, model_config, head_model = MODEL_CLASSES[args.model_name]
+    tokenizer = pretrained_tokenizer.from_pretrained(args.model_name)
+    tokenizer.pad_token = tokenizer.eos_token
 
-    
-    data_collator = DataCollatorForSeq2Seq(
-        tokenizer=tokenizer, model=model, return_tensors="pt"
+    config = model_config.from_pretrained(args.model_name)
+    model = head_model(config)
+
+    data_collator = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer,
+        mlm_probability=0.15,
+        mlm=False,
     )
 
-    train_dataset = AdditionDatasetSeq2Seq(
-        file_path=args.train_data_file, tokenizer=tokenizer, max_number_len=20
-    )
-    eval_dataset = AdditionDatasetSeq2Seq(
-        file_path=args.eval_data_file, tokenizer=tokenizer, max_number_len=20
-    )
-
+    train_dataset = AdditionDataset(file_path=args.train_data_file, tokenizer=tokenizer)
+    eval_dataset = AdditionDataset(file_path=args.eval_data_file, tokenizer=tokenizer)
     train_type = args.train_data_file.split("/")[-1].split(".")[0]
-    training_args = Seq2SeqTrainingArguments(
-        output_dir=f"{args.output_dir}/{train_type}/{args.model_name}_{args.train_type}/results",
-        logging_dir=f"{args.output_dir}/{train_type}/{args.model_name}_{args.train_type}/logs",
-        num_train_epochs=10,
-        learning_rate=2e-5,
-        weight_decay=0.01,
-        warmup_steps=100,
+
+    training_args = TrainingArguments(
+        output_dir=f"{args.output_dir}/{train_type}/{args.model_name}/results",
+        logging_dir=f"{args.output_dir}/{train_type}/{args.model_name}/logs",
+        num_train_epochs=args.num_train_epochs,
+        learning_rate=5e-5,
         lr_scheduler_type="cosine",
         per_device_train_batch_size=args.train_batch_size,  # batch size per device during training
         per_device_eval_batch_size=args.eval_batch_size,
         load_best_model_at_end=True,  # load the best model when finished training (default metric is loss)
         evaluation_strategy="steps",
         logging_steps=500,  # log & save weights each logging_steps
-        save_steps=500,
-        predict_with_generate=True,
-        report_to="wandb",
+        report_to="none",
     )
 
     trainer = Trainer(
@@ -149,19 +104,9 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=data_collator,
-        tokenizer=tokenizer,
     )
 
     trainer.train()
-    eval_results = trainer.evaluate()
     trainer.save_model(
-        f"{args.output_dir}/{train_type}/{args.model_name}_{args.train_type}/best_checkpoint"
+        f"{args.output_dir}/{train_type}/{args.model_name}/best_checkpoint"
     )
-
-    perplexity = (
-        None
-        if args.model_name.split("-")[0] == "t5"
-        else math.exp(eval_results["eval_loss"])
-    )
-    save_path = f"{args.output_dir}/{train_type}/{args.model_name}_{args.train_type}/evaluation.txt"
-    save_result(save_path, perplexity, eval_results)
